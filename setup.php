@@ -11,9 +11,15 @@ class Setup
 
     function checkComposer(): void
     {
-        $composerPath = shell_exec('which composer');
+        $composerPath = null;
 
-        if (empty($composerPath)) {
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $composerPath = shell_exec('where composer');
+        } else {
+            $composerPath = shell_exec('which composer');
+        }
+
+        if (empty(trim($composerPath))) {
             echo "Erro: O Composer não está instalado ou não está disponível no PATH.\n";
             exit(1);
         }
@@ -668,7 +674,7 @@ class Setup
 
     function setUrls(): void
     {
-        $this->rootDir = getcwd();
+        $this->rootDir = "C:\Users\jmbor\dev\interno\laravel-setup\teste12"; //getcwd();
         $this->githubBaseUrl = "https://raw.githubusercontent.com/AN-Tecnologia/laravel-setup/main";
     }
 
@@ -694,18 +700,18 @@ class Setup
 
     function main(): void
     {
-        $this->checkComposer();
+        /* $this->checkComposer();
         $this->setBaseProject();
-        $this->createDirectories();
-        /* $this->downloadFiles();
+        $this->createDirectories(); */
+        $this->downloadFiles();
         $this->replaceFile("app/Helpers/global.php");
         $this->runCommand("php artisan install:api");
         $this->runCommand("composer require spatie/laravel-medialibrary");
         $this->replaceFile("routes/api.php");
-        $this->modifyAppPHP();
+        /* $this->modifyAppPHP();
         $this->installBugsnag();
         $this->addFilesToComposerJson();
-        $this->printConclusionMessage(); */
+        $this->printConclusionMessage();  */
     }
 }
 
