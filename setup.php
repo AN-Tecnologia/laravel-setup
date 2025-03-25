@@ -669,7 +669,7 @@ class Setup
 
     function setUrls(): void
     {
-        $this->rootDir = "C:\\Users\\jmbor\\dev\\interno\\laravel-setup\\teste12"; //getcwd();
+        $this->rootDir = getcwd();
         $this->githubBaseUrl = "https://raw.githubusercontent.com/AN-Tecnologia/laravel-setup/main";
         $this->githubApiUrl = "https://api.github.com/repos/AN-Tecnologia/laravel-setup/contents";
     }
