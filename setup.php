@@ -3,13 +3,14 @@ class Setup
 {
     public ?string $rootDir;
     public ?string $githubBaseUrl;
+    public ?string $githubApiUrl;
 
     public function __construct()
     {
         $this->setUrls();
     }
 
-    function checkComposer(): void
+    private function checkComposer(): void
     {
         $composerPath = null;
 
@@ -27,7 +28,7 @@ class Setup
         echo "Composer encontrado em: $composerPath\n";
     }
 
-    function createDirectory(string $dirPath): void
+    private  function createDirectory(string $dirPath): void
     {
         $fullPath = $this->rootDir . DIRECTORY_SEPARATOR . $dirPath;
 
@@ -37,20 +38,73 @@ class Setup
         }
     }
 
-    function downloadAllFiles(string $subDir): void
+    private function downloadAllFiles(string $subDir): void
     {
         $destDir = $this->getDestinationDirectory($subDir);
-
         $this->createDirectoryIfNotExists($destDir);
+        $this->processDirectory($subDir, $destDir);
+    }
 
-        $files = $this->fetchFilesFromGitHub($subDir);
+    private function makeCurlRequest(string $url, ?string $token = null): array
+    {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'PHP-cURL');
 
-        if (!$files) {
-            echo "Nenhum arquivo encontrado ou erro ao acessar a API.\n";
-            return;
+        $headers = [];
+        if ($token) {
+            $headers[] = "Authorization: token $token";
         }
 
-        $this->downloadGithubFiles($files, $destDir);
+        if (!empty($headers)) {
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        }
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode !== 200) {
+            die("Erro ao acessar a API: HTTP $httpCode");
+        }
+
+        return json_decode($response, true);
+    }
+
+    private function listGithubDirectoryContents(string $subDir, ?string $token = null): array
+    {
+        $githubApiUrl = $this->githubApiUrl . '/' . $subDir;
+        return $this->makeCurlRequest($githubApiUrl, $token);
+    }
+
+    private function getFilesUrls(array $directoryContents): array
+    {
+        $urls = [];
+        foreach ($directoryContents as $content) {
+            $urls[$content['name']] = $content['download_url'];
+        }
+        return $urls;
+    }
+
+    private function processDirectory(string $subDir, string $destDir): void
+    {
+        $directoryContents = $this->listGithubDirectoryContents($subDir);
+        $files = $this->getFilesUrls($directoryContents);
+        foreach ($files as $fileName => $fileUrl) {
+            $this->downloadFile($fileName, $fileUrl, $destDir);
+        }
+    }
+
+    private function downloadFile(string $fileName, string $fileUrl, string $destDir): void
+    {
+        echo "Baixando $fileUrl...\n";
+
+        $fileContent = file_get_contents($fileUrl);
+        $destinationPath = $destDir . '/' . $fileName;
+
+        file_put_contents($destinationPath, $fileContent);
+        echo "Arquivo salvo em:" .  $destinationPath . "\n";
     }
 
     private function getDestinationDirectory(string $subDir): string
@@ -66,104 +120,7 @@ class Setup
         }
     }
 
-    private function downloadGithubFiles(array $files, string $destDir): void
-    {
-        foreach ($files as $file) {
-            if ($this->isValidFile($file)) {
-                $fileUrl = $file['download_url'];
-                $filePath = $destDir . DIRECTORY_SEPARATOR . $file['name'];
-                $this->downloadFile($fileUrl, $filePath);
-            } else {
-                echo "O item {$file['name']} não é um arquivo válido.\n";
-            }
-        }
-    }
-
-    private function isValidFile(array $file): bool
-    {
-        return isset($file['type']) && $file['type'] === 'file' && isset($file['download_url'], $file['name']);
-    }
-
-    function fetchFilesFromGitHub(string $subDir): ?array
-    {
-        $apiUrl = $this->buildGitHubApiUrl($subDir);
-        $headers = $this->getGitHubHeaders();
-
-        $response = $this->executeCurlRequest($apiUrl, $headers);
-
-        if (!$response) {
-            return null;
-        }
-
-        return $this->decodeJsonResponse($response);
-    }
-
-    private function buildGitHubApiUrl(string $subDir): string
-    {
-        return "https://api.github.com/repos/AN-Tecnologia/laravel-setup/contents/$subDir";
-    }
-
-    private function getGitHubHeaders(): array
-    {
-        return [
-            'Accept' => 'application/vnd.github.v3+json',
-            'User-Agent' => 'PHP Script',
-        ];
-    }
-
-    private function executeCurlRequest(string $url, array $headers): ?string
-    {
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-
-        $response = curl_exec($ch);
-
-        if ($response === false) {
-            echo "Erro ao acessar a API do GitHub: " . curl_error($ch) . "\n";
-            curl_close($ch);
-            return null;
-        }
-
-        $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($statusCode !== 200) {
-            echo "Erro na resposta da API. Código de status HTTP: $statusCode\n";
-            return null;
-        }
-
-        return $response;
-    }
-
-    private function decodeJsonResponse(string $response): ?array
-    {
-        $files = json_decode($response, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            echo "Erro ao decodificar a resposta JSON: " . json_last_error_msg() . "\n";
-            return null;
-        }
-
-        return $files;
-    }
-
-    function downloadFile(string $fileUrl, string $filePath): void
-    {
-        echo "Baixando $fileUrl...\n";
-
-        $fileContent = file_get_contents($fileUrl);
-
-        if ($fileContent === false) {
-            echo "Erro ao baixar o arquivo $fileUrl\n";
-            return;
-        }
-
-        file_put_contents($filePath, $fileContent);
-        echo "Arquivo salvo em: $filePath\n";
-    }
-
-    function testDirectory(string $directoryPath): bool
+    private function testDirectory(string $directoryPath): bool
     {
         if (!is_dir($directoryPath)) {
             echo "Diretório $directoryPath não encontrado.\n";
@@ -172,51 +129,46 @@ class Setup
         return true;
     }
 
-    function createDirectoryAndFile(string $filePath): string
+    private function createDirectoryAndFile(string $filePath, string $downloadUrl, bool $shouldForce = false): void
     {
         $fullPath = $this->rootDir . DIRECTORY_SEPARATOR . $filePath;
         $directoryPath = dirname($fullPath);
+        $fileName = basename($fullPath);
+        $directoryName = str_replace([$fileName, '/' . $fileName, '\\' . $fileName], '', $filePath);
 
         if (!$this->testDirectory($directoryPath)) {
             echo "Criando diretório $directoryPath...\n";
-            $this->createDirectory($directoryPath);
+            $this->createDirectory($directoryName);
         }
 
-        if (!file_exists($fullPath)) {
-            echo "Arquivo $filePath não encontrado. Criando arquivo...\n";
-            $this->createFile($fullPath);
+        if (file_exists($fullPath)) {
+            if ($shouldForce) {
+                echo "Forçando substituição do arquivo $filePath...\n";
+                unlink($fullPath);
+                echo "Arquivo removido. Baixando novamente...\n";
+            } else {
+                echo "Arquivo $filePath já existe. Skipping...\n";
+                return;
+            }
         }
 
-        return $fullPath;
+        echo "Baixando arquivo $filePath...\n";
+        $this->downloadFile($fileName, $downloadUrl, $directoryPath);
     }
 
-    function createFile(string $filePath): void
+    private function replaceFile(string $filePath, bool $shouldForce = false): void
     {
-        file_put_contents($filePath, '');
+        $downloadUrl = $this->githubBaseUrl . '/' . $filePath;
+        $this->createDirectoryAndFile($filePath, $downloadUrl, $shouldForce);
     }
 
-    function replaceFile(string $filePath): void
-    {
-        if (empty($this->rootDir)) {
-            echo "[ERRO] O parâmetro baseDir não foi passado corretamente.\n";
-            exit(1);
-        }
-
-        $githubFileUrl = $this->githubBaseUrl . '/' . $filePath;
-
-        $fullPath = $this->createDirectoryAndFile($filePath, $this->rootDir);
-
-        echo "Substituindo $filePath...\n";
-        $this->downloadFile($githubFileUrl, $fullPath);
-    }
-
-    function checkMiddlewareImports(string $content): bool
+    private  function checkMiddlewareImports(string $content): bool
     {
         return (strpos($content, 'use App\\Http\\Middleware\\LogRequest;') !== false) &&
             (strpos($content, 'use App\\Http\\Middleware\\LogResponse;') !== false);
     }
 
-    function addMiddlewareImports(string $filePath, string $content): void
+    private  function addMiddlewareImports(string $filePath, string $content): void
     {
         echo 'Importações de middleware não encontradas. Adicionando...' . PHP_EOL;
 
@@ -229,64 +181,92 @@ class Setup
         echo 'Importações de middleware adicionadas com sucesso.' . PHP_EOL;
     }
 
-    function addMiddlewareInWithMiddleware(string $filePath): void
+    private function addMiddlewareInWithMiddleware(string $filePath): void
     {
         echo "Lendo conteúdo do arquivo $filePath..." . PHP_EOL;
 
-        $content = file_get_contents($filePath);
+        $lines = $this->readBootstrapFileLines($filePath);
+        $middlewareIndex = $this->findMiddlewareBlockIndex($lines);
 
-        echo "Verificando se '->withMiddleware' existe no conteúdo..." . PHP_EOL;
-        if (preg_match('/->withMiddleware\s*\(\s*function\s*\(Middleware\s*\$middleware\s*\)\s*\{/', $content)) {
-            echo "'->withMiddleware' encontrado, adicionando middleware..." . PHP_EOL;
-
-            $lines = explode(PHP_EOL, $content);
-
-            echo "Primeiras 5 linhas do conteúdo do arquivo:" . PHP_EOL;
-            for ($i = 0; $i < 5; $i++) {
-                echo $lines[$i] . PHP_EOL;
-            }
-
-            echo "Procurando o índice da linha onde ocorre '->withMiddleware'..." . PHP_EOL;
-            $middlewareIndex = null;
-            foreach ($lines as $i => $line) {
-                if (preg_match('/->withMiddleware/', $line)) {
-                    $middlewareIndex = $i;
-                    break;
-                }
-            }
-
-            echo "Índice do 'withMiddleware': $middlewareIndex" . PHP_EOL;
-
-            if ($middlewareIndex !== null) {
-                echo "Adicionando os middlewares após a linha do 'withMiddleware'..." . PHP_EOL;
-
-                $middlewareString = PHP_EOL . "        \$middleware->append(LogRequest::class);" . PHP_EOL . "        \$middleware->append(LogResponse::class);";
-                $lines[$middlewareIndex + 1] .= $middlewareString;
-
-                echo "Middleware adicionado com sucesso." . PHP_EOL;
-            } else {
-                echo "[ERRO] Não foi possível encontrar a linha do withMiddleware." . PHP_EOL;
-                exit(1);
-            }
-
-            echo "Salvando alterações no arquivo $filePath..." . PHP_EOL;
-            file_put_contents($filePath, implode(PHP_EOL, $lines));
-
-            echo 'Alterações no arquivo feitas com sucesso.' . PHP_EOL;
-        } else {
-            echo "[ERRO] Não foi possível localizar o bloco withMiddleware no arquivo." . PHP_EOL;
+        if ($middlewareIndex === null) {
+            echo "[ERRO] Bloco 'withMiddleware' não encontrado no arquivo." . PHP_EOL;
             exit(1);
         }
+
+        $insertIndex = $this->findMiddlewareInsertIndex($lines, $middlewareIndex);
+        if ($insertIndex === null) {
+            echo "[ERRO] Não foi possível encontrar o local correto para inserir os middlewares." . PHP_EOL;
+            exit(1);
+        }
+
+        $lines = $this->insertMiddlewareInBootstrap($lines, $insertIndex);
+        $this->saveModifiedBootstrapFile($filePath, $lines);
     }
 
-    function modifyAppPHP(): void
+    /**
+     * Lê o conteúdo do arquivo `bootstrap/app.php` e retorna as linhas tratadas.
+     */
+    private function readBootstrapFileLines(string $filePath): array
+    {
+        $content = file_get_contents($filePath);
+        return preg_split('/\r\n|\r|\n/', $content); // Suporte para diferentes sistemas operacionais
+    }
+
+    /**
+     * Encontra a linha onde `withMiddleware` começa dentro do arquivo `bootstrap/app.php`.
+     */
+    private function findMiddlewareBlockIndex(array $lines): ?int
+    {
+        foreach ($lines as $i => $line) {
+            if (preg_match('/->withMiddleware\s*\(\s*function\s*\(Middleware\s*\$middleware\s*\)\s*\{/', $line)) {
+                return $i;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Encontra a posição correta para inserir os middlewares antes do fechamento `}` dentro do bloco `withMiddleware`.
+     */
+    private function findMiddlewareInsertIndex(array $lines, int $middlewareIndex): ?int
+    {
+        for ($i = $middlewareIndex + 1; $i < count($lines); $i++) {
+            if (preg_match('/^\s*\}/', $lines[$i])) { // Encontrar a linha de fechamento `}`
+                return $i;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Insere os middlewares dentro do bloco `withMiddleware` antes do fechamento `}`.
+     */
+    private function insertMiddlewareInBootstrap(array $lines, int $insertIndex): array
+    {
+        echo "Adicionando os middlewares..." . PHP_EOL;
+        $middlewareString = "        \$middleware->append(LogRequest::class);\n        \$middleware->append(LogResponse::class);";
+
+        array_splice($lines, $insertIndex, 0, $middlewareString);
+        return $lines;
+    }
+
+    /**
+     * Salva as alterações feitas no arquivo `bootstrap/app.php`.
+     */
+    private  function saveModifiedBootstrapFile(string $filePath, array $lines): void
+    {
+        file_put_contents($filePath, implode(PHP_EOL, $lines));
+        echo "Alterações no arquivo 'bootstrap/app.php' feitas com sucesso." . PHP_EOL;
+    }
+
+    private function modifyAppPHP(): void
     {
         $filePath = $this->rootDir . DIRECTORY_SEPARATOR . 'bootstrap' . DIRECTORY_SEPARATOR . 'app.php';
         echo "Modificando $filePath..." . PHP_EOL;
 
-        $content = file_get_contents($filePath);
-
         $this->addMiddlewareInWithMiddleware($filePath);
+
+        $content = file_get_contents($filePath);
 
         if ($this->checkMiddlewareImports($content)) {
             echo 'Importações de middleware já configuradas. Nenhuma alteração necessária.' . PHP_EOL;
@@ -295,26 +275,24 @@ class Setup
         }
     }
 
-    function runCommand(string $command): void
+    private function runCommand(string $command): void
     {
-        echo "Executando comando: $command" . PHP_EOL;
-        exec($command);
+        echo "Executando $command no diretório: $this->rootDir" . PHP_EOL;
+        exec("cd {$this->rootDir} && echo n | $command");
     }
 
-
-    function installBugsnag(): void
+    private  function installBugsnag(): void
     {
         echo "Instalando Bugsnag..." . PHP_EOL;
         $this->runCommand("composer require bugsnag/bugsnag-laravel");
-        $this->addBugsnagApiKeyToEnv($this->rootDir);
-        $loggingConfigPath = $this->rootDir . DIRECTORY_SEPARATOR . "config" . DIRECTORY_SEPARATOR . "logging.php";
-        $this->addBugsnagLoggingChannel($loggingConfigPath);
-        $this->modifyLogStackVariable($this->rootDir);
-        $this->addBugsnagBootstrapper($this->rootDir);
-        $this->addBugsnagServiceProvider($this->rootDir);
+        $this->addBugsnagApiKeyToEnv();
+        $this->addBugsnagLoggingChannel();
+        $this->modifyLogStackVariable();
+        $this->addBugsnagBootstrapper();
+        $this->addBugsnagServiceProvider();
     }
 
-    function addBugsnagApiKeyToEnv(): void
+    private  function addBugsnagApiKeyToEnv(): void
     {
         echo "Adicionando chave de API do Bugsnag ao .env e .env.example..." . PHP_EOL;
 
@@ -366,7 +344,7 @@ class Setup
         }
     }
 
-    function addBugsnagBootstrapper(): void
+    private function addBugsnagBootstrapper(): void
     {
         echo "Adicionando Bugsnag OomBootstrapper no arquivo bootstrap/app.php..." . PHP_EOL;
 
@@ -415,13 +393,14 @@ class Setup
 
     private function addOomBootstrapperToContent(string $content): string
     {
-        $pattern = '/(?<=return\s+\$app;)/';
-        $replacement = PHP_EOL . '(new \Bugsnag\BugsnagLaravel\OomBootstrapper())->bootstrap();' . PHP_EOL;
+        $pattern = '/use Illuminate\\\\Foundation\\\\Configuration\\\\Middleware;/';
+
+        $replacement = 'use Illuminate\Foundation\Configuration\Middleware;' . PHP_EOL . PHP_EOL . '(new \Bugsnag\BugsnagLaravel\OomBootstrapper())->bootstrap();' . PHP_EOL;
+
         return preg_replace($pattern, $replacement, $content);
     }
 
-
-    function addBugsnagServiceProvider(): void
+    private function addBugsnagServiceProvider(): void
     {
         echo "Adicionando BugsnagServiceProvider no arquivo bootstrap/providers.php..." . PHP_EOL;
 
@@ -471,11 +450,12 @@ class Setup
     private function addBugsnagServiceProviderToContent(string $content): string
     {
         $providerLine = "    Bugsnag\BugsnagLaravel\BugsnagServiceProvider::class,";
-        return preg_replace('/(\[)/', PHP_EOL . '$1' . PHP_EOL . $providerLine, $content, 1);
+        $pattern = '/(App\\\\Providers\\\\AppServiceProvider::class,)/';
+        $replacement = $providerLine . PHP_EOL . '$1';
+        return preg_replace($pattern, $replacement, $content);
     }
 
-
-    function modifyLogStackVariable(): void
+    private  function modifyLogStackVariable(): void
     {
         echo "Alterando a variável LOG_STACK para 'single,bugsnag' nos arquivos .env e .env.example..." . PHP_EOL;
 
@@ -508,21 +488,21 @@ class Setup
         file_put_contents($filePath, $updatedContent);
     }
 
-
-    function addBugsnagLoggingChannel(string $configFilePath): void
+    private function addBugsnagLoggingChannel(): void
     {
         echo "Adicionando canal Bugsnag ao arquivo de configuração de logging..." . PHP_EOL;
+        $loggingConfigPath = $this->rootDir . DIRECTORY_SEPARATOR . "config" . DIRECTORY_SEPARATOR . "logging.php";
 
-        if (!$this->fileExists($configFilePath)) {
+        if (!$this->fileExists($loggingConfigPath)) {
             return;
         }
 
-        if ($this->hasBugsnagChannel($configFilePath)) {
+        if ($this->hasBugsnagChannel($loggingConfigPath)) {
             echo "Canal Bugsnag já está presente no arquivo de configuração de logging." . PHP_EOL;
             return;
         }
 
-        $this->appendBugsnagChannel($configFilePath);
+        $this->appendBugsnagChannel($loggingConfigPath);
         echo "Canal Bugsnag adicionado ao arquivo de configuração de logging com sucesso." . PHP_EOL;
     }
 
@@ -537,22 +517,36 @@ class Setup
 
     private function hasBugsnagChannel(string $filePath): bool
     {
-        return strpos(file_get_contents($filePath), "'bugsnag' => [") !== false;
+        $content = file_get_contents($filePath);
+
+        $pattern = "/'channels'\s*=>\s*\[\s*.*?'bugsnag'\s*=>\s*\[[^]]*\]/s";
+
+        return preg_match($pattern, $content) === 1;
     }
 
     private function appendBugsnagChannel(string $filePath): void
     {
-        $bugsnagChannel = "\r\n        'bugsnag' => [\r\n" .
-            "            'driver' => 'bugsnag',\r\n" .
-            "        ],";
+        echo "Lendo conteúdo do arquivo $filePath..." . PHP_EOL;
+
+        $bugsnagChannel = "\n\n        'bugsnag' => [\n" .
+            "            'driver' => 'bugsnag',\n" .
+            "        ],\n";
 
         $content = file_get_contents($filePath);
-        $updatedContent = preg_replace('/\]$/', $bugsnagChannel, $content);
-        file_put_contents($filePath, $updatedContent);
+
+        $pattern = '/(\s*\],\s*\n\s*\];)/m';
+
+        if (preg_match($pattern, $content, $matches)) {
+            echo "'channels' encontrado, adicionando Bugsnag..." . PHP_EOL;
+            $updatedContent = preg_replace($pattern, $bugsnagChannel . '$1', $content, 1);
+            file_put_contents($filePath, $updatedContent);
+            echo "Bugsnag adicionado com sucesso!" . PHP_EOL;
+        } else {
+            echo "[ERRO] Não foi possível encontrar o fechamento correto do array 'channels'." . PHP_EOL;
+        }
     }
 
-
-    function addFilesToComposerJson(): void
+    private function addFilesToComposerJson(): void
     {
         echo "Adicionando a chave 'files' no 'composer.json'..." . PHP_EOL;
 
@@ -567,6 +561,7 @@ class Setup
         if (!$this->hasAutoloadDevKey($composerContent)) {
             exit(1);
         }
+
 
         if ($this->addFilesKey($composerContent)) {
             $this->writeComposerJson($composerPath, $composerContent);
@@ -611,7 +606,7 @@ class Setup
         file_put_contents($filePath, json_encode($composerContent, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     }
 
-    function handleFirstOption(): void
+    private function handleFirstOption(): void
     {
         echo "Digite o nome do projeto Laravel a ser instalado: ";
         $projectName = trim(fgets(STDIN));
@@ -630,7 +625,7 @@ class Setup
         $this->rootDir = $projectPath;
     }
 
-    function handleSecondOption(): void
+    private function handleSecondOption(): void
     {
         echo "Aplicando o template na pasta atual...\n";
 
@@ -674,8 +669,9 @@ class Setup
 
     function setUrls(): void
     {
-        $this->rootDir = "C:\Users\jmbor\dev\interno\laravel-setup\teste12"; //getcwd();
+        $this->rootDir = "C:\\Users\\jmbor\\dev\\interno\\laravel-setup\\teste12"; //getcwd();
         $this->githubBaseUrl = "https://raw.githubusercontent.com/AN-Tecnologia/laravel-setup/main";
+        $this->githubApiUrl = "https://api.github.com/repos/AN-Tecnologia/laravel-setup/contents";
     }
 
     function getOption(): int|string
@@ -700,18 +696,18 @@ class Setup
 
     function main(): void
     {
-        /* $this->checkComposer();
+        $this->checkComposer();
         $this->setBaseProject();
-        $this->createDirectories(); */
+        $this->createDirectories();
         $this->downloadFiles();
         $this->replaceFile("app/Helpers/global.php");
         $this->runCommand("php artisan install:api");
         $this->runCommand("composer require spatie/laravel-medialibrary");
-        $this->replaceFile("routes/api.php");
-        /* $this->modifyAppPHP();
+        $this->replaceFile("routes/api.php", true);
+        $this->modifyAppPHP();
         $this->installBugsnag();
         $this->addFilesToComposerJson();
-        $this->printConclusionMessage();  */
+        $this->printConclusionMessage();
     }
 }
 
